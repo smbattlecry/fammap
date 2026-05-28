@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Family Map</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+        body {
+            font-family: Georgia, 'Times New Roman', serif;
+            background: #fafafa; color: #1e293b;
+            height: 100vh; height: 100dvh;
+            overflow: hidden;
+            display: flex; flex-direction: column;
+        }
+
+        .header {
+            background: white; border-bottom: 1px solid #f1f5f9;
+            padding: 12px 16px; display: flex; align-items: center; gap: 12px;
+            z-index: 10; box-shadow: 0 2px 10px rgba(0,0,0,0.06); flex-shrink: 0;
+        }
+        .header-icon {
+            width: 38px; height: 38px; background: #78350f;
+            display: flex; align-items: center; justify-content: center;
+            color: white; font-size: 20px; flex-shrink: 0; border-radius: 2px;
+        }
+        .header-text h1 { font-size: 13px; font-weight: 300; letter-spacing: 0.18em; text-transform: uppercase; }
+        .header-text p  { font-size: 9px; color: #94a3b8; letter-spacing: 0.2em; text-transform: uppercase; margin-top: 1px; }
+
+        /* Viewport — clips everything, receives touch */
+        .map-viewport {
+            flex: 1; position: relative; overflow: hidden;
+            background: #fdfdfd; touch-action: none;
+        }
+
+        /* Canvas — the single element we transform */
+        .map-canvas {
+            position: absolute;
+            transform-origin: 0 0;
+            will-change: transform;
+            /* size set by JS */
+        }
+
+        .map-svg { display: block; opacity: 0.5; width: 100%; height: 100%; }
+
+        .markers-layer {
+            position: absolute; inset: 0; pointer-events: none;
+        }
+        .city-marker {
+            position: absolute;
+            cursor: pointer; z-index: 5; pointer-events: all;
+            /* counter-scale set by JS */
+        }
+        .marker-ring {
+            position: absolute; width: 32px; height: 32px; border-radius: 50%;
+            top: 50%; left: 50%; transform: translate(-50%,-50%);
+            background: rgba(251,191,36,0.18); display: none;
+            animation: ping 1.5s ease-out infinite;
+        }
+        .city-marker.active .marker-ring { display: block; }
+        @keyframes ping {
+            0%   { opacity:1; transform:translate(-50%,-50%) scale(1); }
+            100% { opacity:0; transform:translate(-50%,-50%) scale(2.5); }
+        }
+        .marker-dot {
+            width: 32px; height: 32px; border-radius: 50%;
+            border: 2px solid #e2e8f0; background: white;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+            transition: all 0.3s ease; position: relative; z-index: 1;
+        }
+        .city-marker.active .marker-dot {
+            background: #78350f; border-color: white;
+            transform: scale(1.3) rotate(45deg);
+            box-shadow: 0 4px 12px rgba(120,53,15,0.4);
+        }
+        .marker-icon { width: 13px; height: 13px; color: #94a3b8; transition: all 0.3s; }
+        .city-marker.active .marker-icon { color: white; transform: rotate(-45deg); }
+        .city-label {
+            position: absolute; top: 28px; left: 50%;
+            white-space: nowrap; font-size: 8px;
+            text-transform: uppercase; letter-spacing: 0.12em;
+            padding: 3px 7px;
+            background: rgba(255,255,255,0.96); backdrop-filter: blur(4px);
+            border: 1px solid #e2e8f0; box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+            opacity: 0; pointer-events: none;
+            transition: opacity 0.3s, transform 0.3s;
+            transform: translateX(-50%) translateY(4px);
+        }
+        .city-marker.active .city-label {
+            opacity: 1; border-color: #78350f; font-weight: bold;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .legend {
+            position: absolute; bottom: 10px; left: 10px;
+            background: rgba(255,255,255,0.9); backdrop-filter: blur(4px);
+            padding: 8px 12px; border: 1px solid rgba(0,0,0,0.05);
+            display: grid; grid-template-columns: 1fr 1fr; gap: 4px 14px;
+            font-size: 8px; text-transform: uppercase; letter-spacing: 0.1em; color: #94a3b8;
+            border-radius: 4px; pointer-events: none;
+        }
+        .legend-item { display: flex; align-items: center; gap: 5px; }
+        .legend-dot  { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+
+
+        /* Sheet & overlay */
+        .overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.28);
+            z-index: 50; opacity: 0; pointer-events: none; transition: opacity 0.35s;
+        }
+        .overlay.active { opacity: 1; pointer-events: all; }
+        .bottom-sheet {
+            position: fixed; bottom: 0; left: 0; right: 0;
+            background: white; border-top-left-radius: 22px; border-top-right-radius: 22px;
+            box-shadow: 0 -8px 32px rgba(0,0,0,0.14);
+            z-index: 100; transform: translateY(100%);
+            transition: transform 0.42s cubic-bezier(0.32,0.72,0,1);
+            max-height: 78vh; display: flex; flex-direction: column;
+            padding-bottom: env(safe-area-inset-bottom, 16px);
+        }
+        .bottom-sheet.open { transform: translateY(0); }
+        .sheet-handle { width: 44px; height: 4px; background: #e2e8f0; border-radius: 2px; margin: 14px auto 0; flex-shrink: 0; }
+        .sheet-scroll { overflow-y: auto; padding: 16px 20px 28px; }
+        .sheet-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+        .region-badge { font-size: 9px; text-transform: uppercase; letter-spacing: 0.2em; color: #92400e; font-weight: bold; background: #fffbeb; padding: 4px 12px; border: 1px solid #fde68a; border-radius: 2px; }
+        .close-btn { background: #f8fafc; border: none; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; color: #64748b; font-size: 16px; display: flex; align-items: center; justify-content: center; }
+        .close-btn:active { background: #e2e8f0; }
+        .city-title { font-size: 26px; font-weight: 300; margin-bottom: 18px; line-height: 1.25; color: #1e293b; }
+        .divider { height: 1px; background: linear-gradient(to right, #fde68a, transparent); margin-bottom: 18px; }
+        .section-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.3em; color: #94a3b8; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+        .people-list { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; }
+        .person-name { font-size: 17px; border-bottom: 1px solid #f1f5f9; padding-bottom: 3px; color: #334155; }
+        .story-block { background: #fcfaf7; padding: 18px 20px; border: 1px solid #fef3c7; border-radius: 4px; margin-bottom: 16px; position: relative; overflow: hidden; }
+        .story-book-icon { position: absolute; right: -8px; bottom: -8px; font-size: 48px; opacity: 0.07; transform: rotate(12deg); pointer-events: none; }
+        .story-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.3em; color: rgba(146,64,14,0.45); margin-bottom: 10px; }
+        .story-text { font-size: 15px; line-height: 1.72; font-style: italic; color: #475569; font-weight: 300; position: relative; z-index: 1; }
+        .tags-list { display: flex; flex-wrap: wrap; gap: 6px; }
+        .tag { font-size: 9px; text-transform: uppercase; letter-spacing: 0.12em; color: #64748b; background: #f8fafc; padding: 4px 10px; border-radius: 2px; border: 1px solid #e2e8f0; }
+        svg.icon { width: 10px; height: 10px; display: block; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div class="header-icon">Լ</div>
+    <div class="header-text">
+        <h1>Լիդիա և Ջան</h1>
+        <p>Лідія Богунська & Ян Богунський · Ереван</p>
+    </div>
+</div>
+
+<div class="map-viewport" id="vp">
+
+    <div class="map-canvas" id="canvas">
+        <svg id="mapSvg" viewBox="0 0 1000 500" class="map-svg">
+            <path d="M400,100 L550,110 L600,150 L580,200 L450,220 L380,180 Z" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+            <path d="M600,80 L850,100 L900,150 L800,200 L650,180 Z" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+            <path d="M580,200 L680,210 L720,280 L620,300 L560,260 Z" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+            <path d="M500,240 L550,230 L580,260 L540,290 L480,280 Z" fill="#fffbeb" stroke="#fcd34d" stroke-width="1.5"/>
+            <path d="M650,300 L750,310 L780,420 L700,450 L630,380 Z" fill="#fff1f2" stroke="#fca5a5" stroke-width="1.5"/>
+            <text x="460" y="160" font-family="serif" font-size="11" fill="#94a3b8" text-anchor="middle" font-style="italic">Европа</text>
+            <text x="730" y="140" font-family="serif" font-size="10" fill="#94a3b8" text-anchor="middle" font-style="italic">Сибирь</text>
+            <text x="635" y="255" font-family="serif" font-size="10" fill="#94a3b8" text-anchor="middle" font-style="italic">Ср. Азия</text>
+            <text x="525" y="280" font-family="serif" font-size="9" fill="#b45309" text-anchor="middle" font-style="italic">Кавказ</text>
+            <text x="710" y="385" font-family="serif" font-size="10" fill="#94a3b8" text-anchor="middle" font-style="italic">Индия</text>
+        </svg>
+        <div class="markers-layer" id="markersLayer"></div>
+        <div class="legend">
+            <div class="legend-item"><div class="legend-dot" style="background:#fffbeb;border:1px solid #fcd34d;"></div>Кавказ/Армения</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#eff6ff;border:1px solid #bfdbfe;"></div>Европа/Украина</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#f0fdf4;border:1px solid #86efac;"></div>Средняя Азия</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#fff1f2;border:1px solid #fca5a5;"></div>Индия</div>
+        </div>
+    </div>
+
+
+</div>
+
+<div class="overlay" id="overlay" onclick="closeSheet()"></div>
+<div class="bottom-sheet" id="bottomSheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-scroll" id="sheetContent"></div>
+</div>
+
+<script>
+/* ─── Data ─────────────────────────────────────────────────── */
+const cities = [
+    {id:'wilno',name:'Вильно (Vilnius)',region:'Российская Империя',pos:{x:440,y:155},people:['Николай ст.'],story:'Прапрадед Николай ст. — белый офицер, член Русской Фашистской Партии, деятель эмиграции. После 1946 г. стал украинским националистом в Сан-Франциско.',tags:['Белая эмиграция','Политика'],icon:'shield'},
+    {id:'kyiv',name:'Київ / Бiла Церква',region:'Украинская ССР',pos:{x:475,y:175},people:['Надія','Святослав'],story:'Святослав (прадед) прожил невероятную жизнь: был пожарным в Китае, моряком и агентом ЦРУ. Его мать Надія — киевлянка.',tags:['Спецслужбы','Китай'],icon:'shield'},
+    {id:'panaji',name:'Панаджи (Гоа)',region:'Portuguese India',pos:{x:690,y:390},people:['Рэймонд'],story:'Прапрапрадед Лидии по линии Кетлин-Селины.',tags:['Корни'],icon:'anchor'},
+    {id:'kolkata',name:'Калькутта (Kolkata)',region:'British Empire / India',pos:{x:740,y:345},people:['Николай мл.','Кетлин-Селина','Нарин'],story:'Нарин — калькуттская армянка из известной семьи. Её дочь Кетлин-Селина, узнав о раке, сожгла иконы, отвернувшись от бога. Николай мл. и его братья приехали в Ташкент, не зная ни слова по-русски.',tags:['Индийские армяне','Драма'],icon:'anchor'},
+    {id:'mutki',name:'Мутки (Մոτкан)',region:'Западная Армения / Ottoman Empire',pos:{x:535,y:255},people:['Нвард'],story:'Нвард была отправлена отцом Петросом в Карабах через полгода после гибели Ахпюр Сероба. Её судьба — начало большой истории выживания.',tags:['Геноцид','Спасение'],icon:'cross'},
+    {id:'trnvaz',name:'Трнваз (Արцах)',region:'Арцах / Российская Империя',pos:{x:555,y:248},people:['Айрапет','Варсеник'],story:'Айрапет, плотник, забрал 13-летнюю Варсеник (невесту убитого брата) в Ташкент. Его комод проехал через полмира: из Ташкента в Петербург, а теперь стоит в Ереване.',tags:['Комод-реликвия','Верность'],icon:'cross'},
+    {id:'kokand',name:"Коканд (Qo'qon)",region:'Российская Империя / УзССР',pos:{x:648,y:225},people:['Газар','Нинель'],story:'Газар был купцом, владельцем мебельного дела. Нинель в годы войны жила в одном доме с эвакуированными работниками Эрмитажа, что определило её путь как историка.',tags:['Эрмитаж','Купечество'],icon:'heart'},
+    {id:'tashkent',name:'Ташкент (Toshkent)',region:'Узбекистан / УзССР',pos:{x:642,y:215},people:['Смбат','Ирина','Арам'],story:'Арам был химиком, боксером и бесстрашным инженером. Ирина — матриарх семьи. Здесь пересеклись линии из Индии, Европы и Арцаха.',tags:['Матриархат','Бокс'],icon:'heart'},
+    {id:'aleppo',name:'Алеппо',region:'French Mandate for Syria and Lebanon',pos:{x:515,y:265},people:['Бабкен'],story:'Бабкен приехал в Ереван в 1947 г., но в 1949 г. был депортирован в Сибирь. Его история любви со Степанидой стала известна лишь в её последние годы.',tags:['Репатриация','1947'],icon:'heart'},
+    {id:'kryvyi_rih',name:'Кривой Рог',region:'Украинская ССР',pos:{x:495,y:190},people:['Степанида'],story:'Степанида, бабушка по материнской линии, рисовала и сохранила историю своей любви с Бабкеном до самой деменции.',tags:['Любовь','Память'],icon:'shield'},
+    {id:'ust_kalmanka',name:'Усть-Калманка',region:'Алтай / РСФСР',pos:{x:710,y:155},people:['Юрий','Бабкен'],story:'Место депортации Бабкена и рождения Юрия. Дед Юрий — замкнутый художник, отразивший в своем характере тяжесть семейной истории.',tags:['Ссылка','Художник'],icon:'heart'},
+    {id:'minsk',name:'Минск',region:'Белорусская ССР',pos:{x:465,y:165},people:['Генадзь'],story:'Отец Елены, представитель белорусской ветви.',tags:['Беларусь'],icon:'shield'},
+    {id:'kyzketken',name:'Кызкеткен',region:'Узбекистан / УзССР',pos:{x:620,y:230},people:['Елена'],story:'Елена мечтала стать капитаном, но из-за запрета на профессию для женщин стала морским инженером.',tags:['Море','Характер'],icon:'anchor'},
+    {id:'taganrog',name:'Таганрог',region:'РСФСР',pos:{x:515,y:195},people:['Рита'],story:'Бабушка Рита — врач Красного Креста и акушерка.',tags:['Медицина'],icon:'heart'},
+    {id:'kherson',name:'Херсон',region:'Российская Империя',pos:{x:505,y:205},people:['Павло','Ганна'],story:'Ганна была отлучена от семьи за любовь к Павло — идейному «красному».',tags:['Запретная любовь','Идеология'],icon:'shield'}
+];
+const icons = {
+    shield:`<svg class="icon" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
+    anchor:`<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="3"/><line x1="12" y1="8" x2="12" y2="22"/><path d="M5 12H2a10 10 0 0 0 20 0h-3"/></svg>`,
+    cross: `<svg class="icon" viewBox="0 0 24 24"><line x1="12" y1="2" x2="12" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>`,
+    heart: `<svg class="icon" viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`
+};
+
+/* ─── Canvas size (SVG aspect 1000×500 = 2:1) ─────────────── */
+// Canvas is sized to fit viewport, markers use % coords on it.
+// Transform (scale + translate) is applied to the canvas element only.
+const ASPECT = 2; // width/height
+const vp = document.getElementById('vp');
+const canvas = document.getElementById('canvas');
+
+let cW = 0, cH = 0;   // canvas natural size (px, scale=1)
+let scale = 1, ox = 0, oy = 0;  // current transform
+const MIN_SCALE = 1, MAX_SCALE = 10;
+const STORAGE_KEY = 'fmState';
+
+function sizeCanvas() {
+    const vpW = vp.clientWidth, vpH = vp.clientHeight;
+    // fit canvas inside viewport keeping 2:1 aspect
+    if (vpW / vpH >= ASPECT) {
+        cH = vpH; cW = cH * ASPECT;
+    } else {
+        cW = vpW; cH = cW / ASPECT;
+    }
+    canvas.style.width  = cW + 'px';
+    canvas.style.height = cH + 'px';
+    // center at scale=1
+    ox = (vpW - cW) / 2;
+    oy = (vpH - cH) / 2;
+    scale = 1;
+}
+
+function commit(animated) {
+    canvas.style.transition = animated ? 'transform .22s ease' : 'none';
+    canvas.style.transform  = `translate(${ox}px,${oy}px) scale(${scale})`;
+    if (animated) setTimeout(() => canvas.style.transition = 'none', 250);
+    // Counter-scale markers so they stay fixed size on screen
+    const inv = 1 / scale;
+    document.querySelectorAll('.city-marker').forEach(m => {
+        m.style.transform = `translate(-50%, -50%) scale(${inv})`;
+    });
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({scale, ox, oy})); } catch(e){}
+}
+
+function clamp() {
+    const vpW = vp.clientWidth, vpH = vp.clientHeight;
+    // after scaling, canvas occupies cW*scale × cH*scale
+    // allow panning so that at least 80px of canvas stays visible in each axis
+    const margin = 80;
+    const maxOx =  vpW - margin,  minOx = margin - cW * scale;
+    const maxOy =  vpH - margin,  minOy = margin - cH * scale;
+    ox = Math.max(minOx, Math.min(maxOx, ox));
+    oy = Math.max(minOy, Math.min(maxOy, oy));
+}
+
+function zoomAt(cx, cy, newScale) {
+    // cx,cy in viewport coords
+    newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, newScale));
+    const r = newScale / scale;
+    ox = cx - r * (cx - ox);
+    oy = cy - r * (cy - oy);
+    scale = newScale;
+    clamp();
+    commit(false);
+}
+
+/* ─── Touch handling ─────────────────────────────────────────*/
+let t1 = null, t2 = null;
+let dragStartOx, dragStartOy;
+let pinchStartDist, pinchStartScale, pinchMidX, pinchMidY;
+
+function getTouches(e) {
+    return Array.from(e.touches).map(t => ({x: t.clientX - vp.getBoundingClientRect().left, y: t.clientY - vp.getBoundingClientRect().top, id: t.identifier}));
+}
+
+// Track total movement to distinguish tap vs drag
+let tapMoved = false;
+let tapStartX = 0, tapStartY = 0;
+
+vp.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const ts = getTouches(e);
+    if (ts.length === 1) {
+        t1 = ts[0]; t2 = null;
+        dragStartOx = ox; dragStartOy = oy;
+        tapMoved = false;
+        tapStartX = ts[0].x; tapStartY = ts[0].y;
+    } else if (ts.length >= 2) {
+        t1 = ts[0]; t2 = ts[1];
+        tapMoved = true; // pinch is never a tap
+        const dx = t2.x - t1.x, dy = t2.y - t1.y;
+        pinchStartDist  = Math.hypot(dx, dy);
+        pinchStartScale = scale;
+        pinchMidX = (t1.x + t2.x) / 2;
+        pinchMidY = (t1.y + t2.y) / 2;
+    }
+}, {passive: false});
+
+vp.addEventListener('touchmove', e => {
+    e.preventDefault();
+    const ts = getTouches(e);
+    if (ts.length === 1 && t1 && !t2) {
+        const dx = ts[0].x - tapStartX, dy = ts[0].y - tapStartY;
+        if (Math.hypot(dx, dy) > 6) tapMoved = true;
+        ox = dragStartOx + (ts[0].x - t1.x);
+        oy = dragStartOy + (ts[0].y - t1.y);
+        clamp(); commit(false);
+    } else if (ts.length >= 2 && t2) {
+        tapMoved = true;
+        const a = ts[0], b = ts[1];
+        const dist  = Math.hypot(b.x - a.x, b.y - a.y);
+        const midX  = (a.x + b.x) / 2;
+        const midY  = (a.y + b.y) / 2;
+        const newSc = Math.max(MIN_SCALE, Math.min(MAX_SCALE, pinchStartScale * dist / pinchStartDist));
+        const r = newSc / scale;
+        ox = midX - r * (midX - ox) + (midX - pinchMidX);
+        oy = midY - r * (midY - oy) + (midY - pinchMidY);
+        scale = newSc;
+        pinchMidX = midX; pinchMidY = midY;
+        clamp(); commit(false);
+    }
+}, {passive: false});
+
+vp.addEventListener('touchend', e => {
+    e.preventDefault();
+    // If finger barely moved — it's a tap. Find marker under finger and click it.
+    if (!tapMoved && t1 && !t2) {
+        const vpRect = vp.getBoundingClientRect();
+        // Convert viewport coords to canvas coords
+        const canvasX = (t1.x - ox) / scale;
+        const canvasY = (t1.y - oy) / scale;
+        // Find closest marker within tap radius (44px on screen = 44/scale on canvas)
+        const TAP_R = 44 / scale;
+        let closest = null, closestDist = TAP_R;
+        cities.forEach(city => {
+            const mx = city.pos.x / 1000 * cW;
+            const my = city.pos.y / 500  * cH;
+            const d  = Math.hypot(canvasX - mx, canvasY - my);
+            if (d < closestDist) { closestDist = d; closest = city; }
+        });
+        if (closest) selectCity(closest.id);
+    }
+    const ts = getTouches(e);
+    if (ts.length === 0) { t1 = null; t2 = null; }
+    else if (ts.length === 1) { t1 = ts[0]; t2 = null; dragStartOx = ox; dragStartOy = oy; }
+}, {passive: false});
+
+
+
+/* ─── Markers ────────────────────────────────────────────────*/
+let selectedId = null;
+
+function renderMarkers() {
+    const layer = document.getElementById('markersLayer');
+    layer.innerHTML = '';
+    cities.forEach(city => {
+        const active = city.id === selectedId;
+        const el = document.createElement('div');
+        el.className = 'city-marker' + (active ? ' active' : '');
+        el.style.left = (city.pos.x / 1000 * 100) + '%';
+        el.style.top  = (city.pos.y / 500  * 100) + '%';
+        el.innerHTML = `
+            <div class="marker-ring"></div>
+            <div class="marker-dot"><span class="marker-icon">${icons[city.icon]}</span></div>
+            <div class="city-label">${city.name}</div>`;
+        el.style.transform = `translate(-50%, -50%) scale(${1/scale})`;
+        el.addEventListener('click', () => selectCity(city.id));
+        layer.appendChild(el);
+    });
+}
+
+function selectCity(id) {
+    selectedId = id; renderMarkers();
+    const city = cities.find(c => c.id === id);
+    document.getElementById('sheetContent').innerHTML = `
+        <div class="sheet-header">
+            <span class="region-badge">${city.region}</span>
+            <button class="close-btn" onclick="closeSheet()">✕</button>
+        </div>
+        <h2 class="city-title">${city.name}</h2>
+        <div class="divider"></div>
+        <div class="section-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" style="width:13px;height:13px"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            Имена в истории
+        </div>
+        <div class="people-list">${city.people.map(p=>`<span class="person-name">${p}</span>`).join('')}</div>
+        <div class="story-block">
+            <div class="story-label">Хроника</div>
+            <p class="story-text">«${city.story}»</p>
+            <div class="story-book-icon">📖</div>
+        </div>
+        <div class="tags-list">${city.tags.map(t=>`<span class="tag">${t}</span>`).join('')}</div>`;
+    document.getElementById('bottomSheet').classList.add('open');
+    document.getElementById('overlay').classList.add('active');
+}
+
+function closeSheet() {
+    selectedId = null; renderMarkers();
+    document.getElementById('bottomSheet').classList.remove('open');
+    document.getElementById('overlay').classList.remove('active');
+}
+
+/* ─── Init ───────────────────────────────────────────────────*/
+sizeCanvas();
+
+// Restore saved state
+try {
+    const s = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    if (s && s.scale >= 1) {
+        scale = Math.min(s.scale, MAX_SCALE);
+        ox = s.ox; oy = s.oy;
+        clamp();
+    }
+} catch(e) {}
+
+commit(false);
+renderMarkers();
+
+window.addEventListener('resize', () => { sizeCanvas(); commit(false); });
+</script>
+</body>
+</html>
